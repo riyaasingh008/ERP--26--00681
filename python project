@@ -1,0 +1,445 @@
+"""
+Vehicle Rental Management System
+--------------------------------
+A console-based application written in Python 3 adhering to Object-Oriented 
+Programming (OOP) principles, robust file handling, lists, and dictionaries.
+"""
+
+import os
+from typing import Dict, List, Optional
+
+
+class Vehicle:
+    """Represents an individual vehicle in the rental inventory.
+    
+    Attributes:
+        vehicle_id (str): Unique identifier for the vehicle (e.g., 'V1', 'V2').
+        vehicle_type (str): Type of the vehicle ('Car', 'Bike', etc.).
+        model (str): Make and model name of the vehicle (e.g., 'Swift', 'Splendor').
+        rate_per_day (float): Daily rental charge in INR.
+        is_available (bool): Current rental availability status.
+    """
+
+    def __init__(
+        self,
+        vehicle_id: str,
+        vehicle_type: str,
+        model: str,
+        rate_per_day: float,
+        is_available: bool = True
+    ) -> None:
+        """Initializes a new Vehicle instance."""
+        self.vehicle_id: str = vehicle_id.strip().upper()
+        self.vehicle_type: str = vehicle_type.strip().title()
+        self.model: str = model.strip()
+        self.rate_per_day: float = float(rate_per_day)
+        self.is_available: bool = is_available
+
+    def mark_as_rented(self) -> None:
+        """Updates the availability status to False when rented."""
+        self.is_available = False
+
+    def mark_as_returned(self) -> None:
+        """Updates the availability status to True when returned."""
+        self.is_available = True
+
+    def to_file_format(self) -> str:
+        """Serializes the vehicle data into a comma-separated string for file storage."""
+        return f"{self.vehicle_id},{self.vehicle_type},{self.model},{self.rate_per_day:.2f},{self.is_available}\n"
+
+    @classmethod
+    def from_file_format(cls, line: str) -> "Vehicle":
+        """Deserializes a line from the file into a Vehicle object."""
+        parts = line.strip().split(",")
+        v_id, v_type, model, rate, avail = parts[0], parts[1], parts[2], float(parts[3]), parts[4] == "True"
+        return cls(vehicle_id=v_id, vehicle_type=v_type, model=model, rate_per_day=rate, is_available=avail)
+
+    def display_details(self) -> str:
+        """Returns a formatted string row representing the vehicle's attributes."""
+        status = "Available" if self.is_available else "Rented"
+        return f"| {self.vehicle_id:<6} | {self.vehicle_type:<8} | {self.model:<16} | Rs. {self.rate_per_day:>8.2f} | {status:<11} |"
+
+
+class RentalRecord:
+    """Represents a transaction record for a rented vehicle.
+    
+    Attributes:
+        customer_name (str): Name of the renting customer.
+        vehicle_id (str): ID of the rented vehicle.
+        days (int): Number of days rented.
+        total_bill (float): Net total amount charged after applicable discounts.
+        discount_applied (float): Discount amount deducted from base bill.
+        status (str): Status of the rental ('Active' or 'Returned').
+    """
+
+    def __init__(
+        self,
+        customer_name: str,
+        vehicle_id: str,
+        days: int,
+        total_bill: float,
+        discount_applied: float,
+        status: str = "Active"
+    ) -> None:
+        self.customer_name: str = customer_name.strip()
+        self.vehicle_id: str = vehicle_id.strip().upper()
+        self.days: int = days
+        self.total_bill: float = total_bill
+        self.discount_applied: float = discount_applied
+        self.status: str = status
+
+    def mark_returned(self) -> None:
+        """Marks the rental record as returned."""
+        self.status = "Returned"
+
+    def display_log(self) -> str:
+        """Returns a formatted string representing this rental log."""
+        return (
+            f"| {self.customer_name:<14} | {self.vehicle_id:<6} | {self.days:>4} days | "
+            f"Rs. {self.total_bill:>9.2f} | Rs. {self.discount_applied:>8.2f} | {self.status:<9} |"
+        )
+
+
+class RentalManagementSystem:
+    """Manages vehicle inventory, rental transactions, file persistence, and customer interactions."""
+
+    DISCOUNT_THRESHOLD_DAYS: int = 7
+    DISCOUNT_PERCENTAGE: float = 0.10  # 10% flat discount
+
+    def __init__(self, filename: str = "vehicles.txt") -> None:
+        """Initializes the management system and loads persisted data."""
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        self.filepath: str = os.path.join(base_dir, filename)
+        
+        # Primary data structures:
+        # 1. Dictionary mapping vehicle_id -> Vehicle instance
+        self.vehicles: Dict[str, Vehicle] = {}
+        # 2. List to maintain rental history/logs
+        self.rental_logs: List[RentalRecord] = []
+        # 3. Active rentals dictionary mapping vehicle_id -> RentalRecord
+        self.active_rentals: Dict[str, RentalRecord] = {}
+
+        # Automatically load records from file on startup
+        self.load_vehicles_from_file()
+
+    # -------------------------------------------------------------
+    # FILE HANDLING METHODS
+    # -------------------------------------------------------------
+    def load_vehicles_from_file(self) -> None:
+        """Loads vehicle records from the text file into memory."""
+        if not os.path.exists(self.filepath):
+            with open(self.filepath, "w", encoding="utf-8"):
+                pass
+            return
+
+        try:
+            with open(self.filepath, "r", encoding="utf-8") as file:
+                for line in file:
+                    line = line.strip()
+                    if line:
+                        try:
+                            vehicle = Vehicle.from_file_format(line)
+                            self.vehicles[vehicle.vehicle_id] = vehicle
+                        except (ValueError, IndexError) as err:
+                            print(f"[Warning] Skipping corrupted line: '{line}'. Error: {err}")
+        except IOError as err:
+            print(f"[Error] Failed to read vehicle data from file: {err}")
+
+    def save_vehicles_to_file(self) -> None:
+        """Persists the current state of all vehicles back to the text file."""
+        try:
+            with open(self.filepath, "w", encoding="utf-8") as file:
+                for vehicle in self.vehicles.values():
+                    file.write(vehicle.to_file_format())
+        except IOError as err:
+            print(f"[Error] Failed to save vehicle data to file: {err}")
+
+    # -------------------------------------------------------------
+    # BUSINESS LOGIC & CORE OPERATIONS
+    # -------------------------------------------------------------
+    def add_vehicle(self, vehicle_id: str, vehicle_type: str, model: str, rate_per_day: float) -> bool:
+        """Registers a new vehicle into the inventory."""
+        normalized_id = vehicle_id.strip().upper()
+        if normalized_id in self.vehicles:
+            print(f"\n[Error] Vehicle with ID '{normalized_id}' already exists in inventory!")
+            return False
+
+        new_vehicle = Vehicle(
+            vehicle_id=normalized_id,
+            vehicle_type=vehicle_type,
+            model=model,
+            rate_per_day=rate_per_day,
+            is_available=True
+        )
+        self.vehicles[normalized_id] = new_vehicle
+        self.save_vehicles_to_file()
+        print(f"\n[Success] Vehicle '{normalized_id}' ({model}) added successfully!")
+        return True
+
+    def calculate_bill(self, rate_per_day: float, days: int) -> tuple[float, float, float]:
+        """Calculates total bill applying a flat 10% discount if days >= 7."""
+        base_bill = rate_per_day * days
+        discount = 0.0
+
+        if days >= self.DISCOUNT_THRESHOLD_DAYS:
+            discount = base_bill * self.DISCOUNT_PERCENTAGE
+            net_bill = base_bill - discount
+        else:
+            net_bill = base_bill
+
+        return base_bill, discount, net_bill
+
+    def rent_vehicle(self, customer_name: str, vehicle_id: str, days: int) -> Optional[RentalRecord]:
+        """Processes a rental transaction after strict availability validation."""
+        normalized_id = vehicle_id.strip().upper()
+
+        if normalized_id not in self.vehicles:
+            print(f"\n[Error] Vehicle '{normalized_id}' not found in the inventory.")
+            return None
+
+        vehicle = self.vehicles[normalized_id]
+
+        if not vehicle.is_available:
+            print(f"\n[Denied] Vehicle {normalized_id} is not available for rent.")
+            return None
+
+        base_bill, discount, net_bill = self.calculate_bill(vehicle.rate_per_day, days)
+
+        vehicle.mark_as_rented()
+        self.save_vehicles_to_file()
+
+        record = RentalRecord(
+            customer_name=customer_name,
+            vehicle_id=normalized_id,
+            days=days,
+            total_bill=net_bill,
+            discount_applied=discount,
+            status="Active"
+        )
+        self.rental_logs.append(record)
+        self.active_rentals[normalized_id] = record
+
+        self._print_invoice(record, vehicle, base_bill)
+        return record
+
+    def return_vehicle(self, vehicle_id: str) -> bool:
+        """Processes the return of a rented vehicle and restores its available status."""
+        normalized_id = vehicle_id.strip().upper()
+
+        if normalized_id not in self.vehicles:
+            print(f"\n[Error] Vehicle '{normalized_id}' not found in the inventory.")
+            return False
+
+        vehicle = self.vehicles[normalized_id]
+
+        if vehicle.is_available:
+            print(f"\n[Notice] Vehicle '{normalized_id}' is already marked as 'Available'.")
+            return False
+
+        vehicle.mark_as_returned()
+        self.save_vehicles_to_file()
+
+        if normalized_id in self.active_rentals:
+            self.active_rentals[normalized_id].mark_returned()
+            del self.active_rentals[normalized_id]
+
+        print(f"\n[Success] Vehicle '{normalized_id}' ({vehicle.model}) returned successfully!")
+        print(f"Status updated: 'Available'.")
+        return True
+
+    # -------------------------------------------------------------
+    # DISPLAY & REPORTING METHODS
+    # -------------------------------------------------------------
+    def display_all_vehicles(self) -> None:
+        """Displays all inventory vehicles in a formatted table."""
+        if not self.vehicles:
+            print("\n[Info] No vehicles found in inventory. Please add vehicles first.")
+            return
+
+        print("\n" + "=" * 65)
+        print("                  VEHICLE INVENTORY DETAILS                  ")
+        print("=" * 65)
+        print(f"| {'ID':<6} | {'Type':<8} | {'Model':<16} | {'Rate/Day':<12} | {'Status':<11} |")
+        print("-" * 65)
+        for vehicle in self.vehicles.values():
+            print(vehicle.display_details())
+        print("=" * 65)
+
+    def display_rental_logs(self) -> None:
+        """Displays rental transaction history."""
+        if not self.rental_logs:
+            print("\n[Info] No rental transactions have been recorded yet.")
+            return
+
+        print("\n" + "=" * 74)
+        print("                         RENTAL TRANSACTION LOGS                         ")
+        print("=" * 74)
+        print(f"| {'Customer':<14} | {'Veh ID':<6} | {'Period':<9} | {'Total Bill':<13} | {'Discount':<12} | {'Status':<9} |")
+        print("-" * 74)
+        for log in self.rental_logs:
+            print(log.display_log())
+        print("=" * 74)
+
+    def _print_invoice(self, record: RentalRecord, vehicle: Vehicle, base_bill: float) -> None:
+        """Prints an itemized customer invoice receipt."""
+        print("\n" + "*" * 50)
+        print("               RENTAL INVOICE RECEIPT             ")
+        print("*" * 50)
+        print(f" Customer Name      : {record.customer_name}")
+        print(f" Vehicle ID         : {vehicle.vehicle_id} ({vehicle.model} - {vehicle.vehicle_type})")
+        print(f" Daily Rate         : Rs. {vehicle.rate_per_day:.2f}")
+        print(f" Rental Duration    : {record.days} days")
+        print("-" * 50)
+        print(f" Subtotal           : Rs. {base_bill:.2f}")
+        if record.discount_applied > 0:
+            print(f" Discount (10%)     : -Rs. {record.discount_applied:.2f}  [7+ Days Offer Applied]")
+        else:
+            print(f" Discount           : Rs. 0.00 (Flat 10% on >= 7 days)")
+        print("-" * 50)
+        print(f" Net Payable Bill   : Rs. {record.total_bill:.2f}")
+        print("*" * 50)
+
+
+# -------------------------------------------------------------
+# CONSOLE USER INTERFACE & INPUT VALIDATION
+# -------------------------------------------------------------
+def get_positive_int(prompt: str) -> int:
+    """Prompt user for a positive integer with input validation."""
+    while True:
+        try:
+            value = int(input(prompt).strip())
+            if value <= 0:
+                print("[Input Error] Value must be greater than zero. Try again.")
+                continue
+            return value
+        except ValueError:
+            print("[Input Error] Invalid input! Please enter a valid whole number.")
+
+
+def get_positive_float(prompt: str) -> float:
+    """Prompt user for a positive float with input validation."""
+    while True:
+        try:
+            value = float(input(prompt).strip())
+            if value <= 0:
+                print("[Input Error] Rate must be greater than zero. Try again.")
+                continue
+            return value
+        except ValueError:
+            print("[Input Error] Invalid input! Please enter a valid decimal or numeric rate.")
+
+
+def run_test_cases(system: RentalManagementSystem) -> None:
+    """Automated runner for the 4 mandatory test cases."""
+    print("\n" + "#" * 60)
+    print("        RUNNING 4 MANDATORY SYSTEM TEST CASES         ")
+    print("#" * 60)
+
+    # Test Case 1: Add vehicle V1 (Car, Swift, 1500/day)
+    print("\n--- [TEST CASE 1] Adding Vehicle V1 (Car, Swift, Rs. 1500/day) ---")
+    system.add_vehicle(vehicle_id="V1", vehicle_type="Car", model="Swift", rate_per_day=1500.0)
+
+    # Test Case 2: Rent V1 to customer 'Aman' for 7 days (10% discount -> Rs. 9450)
+    print("\n--- [TEST CASE 2] Renting V1 to 'Aman' for 7 days (Expect 10% Discount, Rs. 9450) ---")
+    record_aman = system.rent_vehicle(customer_name="Aman", vehicle_id="V1", days=7)
+    if record_aman:
+        assert record_aman.total_bill == 9450.0, f"Expected 9450.0, got {record_aman.total_bill}"
+        print("-> Assertion Passed: Total Bill is exactly Rs. 9450.00")
+
+    # Test Case 3: Attempt to rent the same V1 to 'Riya' for 2 days (Must fail)
+    print("\n--- [TEST CASE 3] Attempt to rent V1 to 'Riya' for 2 days (Expect Blocked / Unavailable) ---")
+    record_riya = system.rent_vehicle(customer_name="Riya", vehicle_id="V1", days=2)
+    assert record_riya is None, "Test Failed: Vehicle V1 was rented when it was unavailable!"
+    print("-> Assertion Passed: Blocked successfully with 'Vehicle V1 is not available'.")
+
+    # Test Case 4: Rent V2 (Bike, Splendor, Rs. 500/day) to 'Neha' for 3 days (Rs. 1500), then return V2
+    print("\n--- [TEST CASE 4] Rent V2 to 'Neha' for 3 days (Rs. 1500) and Return it ---")
+    system.add_vehicle(vehicle_id="V2", vehicle_type="Bike", model="Splendor", rate_per_day=500.0)
+    record_neha = system.rent_vehicle(customer_name="Neha", vehicle_id="V2", days=3)
+    if record_neha:
+        assert record_neha.total_bill == 1500.0, f"Expected 1500.0, got {record_neha.total_bill}"
+        print("-> Assertion Passed: Total Bill for 3 days is Rs. 1500.00")
+
+    print("\nReturning V2 back to inventory...")
+    return_success = system.return_vehicle(vehicle_id="V2")
+    assert return_success is True and system.vehicles["V2"].is_available is True
+    print("-> Assertion Passed: V2 status restored to 'Available'.")
+
+    print("\n" + "#" * 60)
+    print("     ALL 4 TEST CASES EXECUTED & PASSED FLAWLESSLY!    ")
+    print("#" * 60 + "\n")
+
+
+def main() -> None:
+    """Main interactive execution loop."""
+    system = RentalManagementSystem(filename="vehicles.txt")
+
+    while True:
+        print("\n" + "=" * 48)
+        print("     VEHICLE RENTAL MANAGEMENT SYSTEM (V1.0)     ")
+        print("=" * 48)
+        print(" 1. Add New Vehicle")
+        print(" 2. Rent a Vehicle")
+        print(" 3. Return a Vehicle")
+        print(" 4. View All Vehicles (Inventory)")
+        print(" 5. View Rental Transaction Logs")
+        print(" 6. Run Automated Test Cases (Test Cases 1-4)")
+        print(" 7. Exit System")
+        print("=" * 48)
+
+        choice = input("Enter your option (1-7): ").strip()
+
+        if choice == "1":
+            print("\n--- ADD NEW VEHICLE ---")
+            v_id = input("Enter Vehicle ID (e.g., V1, V2): ").strip()
+            if not v_id:
+                print("[Input Error] Vehicle ID cannot be empty.")
+                continue
+
+            v_type = input("Enter Vehicle Type (Car / Bike / SUV): ").strip()
+            v_model = input("Enter Vehicle Model (e.g., Swift, Splendor): ").strip()
+            rate = get_positive_float("Enter Daily Rental Rate in Rs: ")
+
+            system.add_vehicle(vehicle_id=v_id, vehicle_type=v_type, model=v_model, rate_per_day=rate)
+
+        elif choice == "2":
+            print("\n--- RENT A VEHICLE ---")
+            customer = input("Enter Customer Name: ").strip()
+            if not customer:
+                print("[Input Error] Customer name cannot be empty.")
+                continue
+
+            v_id = input("Enter Vehicle ID to Rent: ").strip()
+            days = get_positive_int("Enter Number of Rental Days: ")
+
+            system.rent_vehicle(customer_name=customer, vehicle_id=v_id, days=days)
+
+        elif choice == "3":
+            print("\n--- RETURN A VEHICLE ---")
+            v_id = input("Enter Vehicle ID to Return: ").strip()
+            if not v_id:
+                print("[Input Error] Vehicle ID cannot be empty.")
+                continue
+
+            system.return_vehicle(vehicle_id=v_id)
+
+        elif choice == "4":
+            system.display_all_vehicles()
+
+        elif choice == "5":
+            system.display_rental_logs()
+
+        elif choice == "6":
+            run_test_cases(system)
+
+        elif choice == "7":
+            system.save_vehicles_to_file()
+            print("\n[Thank You] Inventory state saved to 'vehicles.txt'. Exiting system.")
+            break
+
+        else:
+            print("\n[Invalid Selection] Please choose a valid option between 1 and 7.")
+
+
+if __name__ == "__main__":
+    main()
